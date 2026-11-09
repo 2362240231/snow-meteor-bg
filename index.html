@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>雪与流星 · 背景</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #060810;
+  }
+
+  /* 两层 Canvas 叠加：先雪，后流星 */
+  #snow-canvas,
+  #meteor-canvas {
+    position: fixed;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  #snow-canvas { z-index: 1; }
+  #meteor-canvas { z-index: 2; }
+
+  /*
+    背景内容区。以后要放文字/卡片/按钮，
+    直接在这个容器里写，动画层在它下面，不会抢事件。
+  */
+  #content-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none; /* 默认不拦截点击；需要交互的内容单独设 pointer-events: auto */
+  }
+</style>
+</head>
+<body>
+
+<!-- 层 1：雪 -->
+<canvas id="snow-canvas"></canvas>
+
+<!-- 层 2：流星 -->
+<canvas id="meteor-canvas"></canvas>
+
+<!-- 层 3：内容（背景板之上） -->
+<div id="content-layer">
+  <!-- 以后在这里放你的内容 -->
+</div>
+
+<script>
+/* ============================================================
+   项目二：雪 + 流星雨 分层背景板
+   结构：
+   - snowCanvas / snowCtx  : 雪花粒子池，持续飘落
+   - meteorCanvas / meteorCtx : 流星粒子池，随机间隔划过
+   - contentLayer          : 最上层 DOM，以后放页面内容
+   ============================================================ */
+
+// ---------- 公共工具 ----------
+const rand = (min, max) => Math.random() * (max - min) + min;
+const randInt = (min, max) => Math.floor(rand(min, max + 1));
+
+// ---------- 雪层 ----------
+const snowCanvas = document.getElementById('snow-canvas');
+const snowCtx = snowCanvas.getContext('2d');
+
+let SW, SH;
+function resizeSnow() {
+  SW = snowCanvas.width = window.innerWidth;
+  SH = snowCanvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeSnow);
+resizeSnow();
+
+const SNOW_COUNT = (() => {
+  // 根据屏幕面积自动调整雪花数量，移动端不至于过多
+  const area = window.innerWidth * window.innerHeight;
+  if (area < 400000) return 90;
+  if (area < 800000) return 140;
+  return 200;
+})();
+
+class Snowflake {
+  constructor() {
+    this.reset(true);
+  }
+  reset(initial = false) {
+    this.x = rand(0, SW);
+    this.y = initial ? rand(-SH, SH) : rand(-40, -10);
+    this.r = rand(0.8, 2.6);
+    this.speedY = rand(0.35, 1.2);
+    this.speedX = rand(-0.25, 0.25);
+    this.drift = rand(0.002, 0.006);
+    this.phase = rand(0, Math.PI * 2);
+    this.alpha = rand(0.35, 0.9);
+    this.layer = this.r > 1.8 ? 2 : 1; // 大雪花略快，做出景深
+  }
+  update(t) {
+    this.phase += this.drift;
+    this.x += this.speedX + Math.sin(this.phase) * 0.35;
+    this.y += this.speedY * (this.layer === 2 ? 1.25 : 1);
+    // 横向出界回绕
+    if (this.x < -10) this.x = SW + 10;
+    if (this.x > SW + 10) this.x = -10;
+    // 落地后回到顶部
+    if (this.y > SH + 10) this.reset();
+  }
+  draw(ctx) {
+    ctx.globalAlpha = this.alpha;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+const snowflakes = Array.from({ length: SNOW_COUNT }, () => new Snowflake());
+
+// ---------- 流星层 ----------
+const meteorCanvas = document.getElementById('meteor-canvas');
+const meteorCtx = meteorCanvas.getContext('2d');
+
+let MW, MH;
+function resizeMeteor() {
+  MW = meteorCanvas.width = window.innerWidth;
+  MH = meteorCanvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeMeteor);
+resizeMeteor();
+
+class Meteor {
+  constructor() {
+    // 从屏幕右上区域进入，向左下划过
+    this.x = rand(MW * 0.55, MW + 80);
+    this.y = rand(-60, MH * 0.35);
+    this.len = rand(90, 180);          // 尾迹长度
+    this.speed = rand(7, 13);
+    this.angle = rand(Math.PI * 0.68, Math.PI * 0.82); // 左下方向
+    this.vx = Math.cos(this.angle) * this.speed;
+    this.vy = Math.sin(this.angle) * this.speed;
+    this.alpha = rand(0.45, 0.95);
+    this.life = randInt(35, 70);
+    this.age = 0;
+    this.width = rand(1.0, 2.2);
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.age++;
+  }
+  draw(ctx) {
+    if (this.age >= this.life) return;
+    const progress = this.age / this.life;
+    const fade = Math.sin(progress * Math.PI); // 两端淡入淡出
+    const tailX = this.x - Math.cos(this.angle) * this.len * progress;
+    const tailY = this.y - Math.sin(this.angle) * this.len * progress;
+
+    const grad = ctx.createLinearGradient(this.x, this.y, tailX, tailY);
+    grad.addColorStop(0, `rgba(255,255,255,${this.alpha * fade})`);
+    grad.addColorStop(0.3, `rgba(200,225,255,${this.alpha * fade * 0.6})`);
+    grad.addColorStop(1, 'rgba(200,225,255,0)');
+
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = this.width;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(tailX, tailY);
+    ctx.stroke();
+
+    // 头部亮点
+    ctx.globalAlpha = fade * this.alpha;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.width * 1.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  get dead() { return this.age >= this.life || this.x < -this.len || this.y > MH + this.len; }
+}
+
+let meteors = [];
+let nextMeteorTime = 0;
+const METEOR_INTERVAL_MIN = 1400;  // 最短间隔（毫秒）
+const METEOR_INTERVAL_MAX = 3800;  // 最长间隔
+
+// ---------- 主循环 ----------
+let snowTime = 0;
+let meteorTime = 0;
+let lastTimestamp = 0;
+
+function loop(timestamp) {
+  if (!lastTimestamp) lastTimestamp = timestamp;
+  const dt = Math.min(timestamp - lastTimestamp, 50); // 防止切标签页后跳帧过大
+  lastTimestamp = timestamp;
+  snowTime += dt;
+  meteorTime += dt;
+
+  // ===== 雪层绘制 =====
+  snowCtx.clearRect(0, 0, SW, SH);
+  for (const f of snowflakes) {
+    f.update(snowTime);
+    f.draw(snowCtx);
+  }
+  snowCtx.globalAlpha = 1;
+
+  // ===== 流星层绘制 =====
+  meteorCtx.clearRect(0, 0, MW, MH);
+
+  if (meteorTime >= nextMeteorTime) {
+    meteors.push(new Meteor());
+    // 偶尔一次双流星
+    if (Math.random() < 0.25) {
+      setTimeout(() => {
+        meteors.push(new Meteor());
+      }, rand(120, 350));
+    }
+    nextMeteorTime = meteorTime + rand(METEOR_INTERVAL_MIN, METEOR_INTERVAL_MAX);
+  }
+
+  for (let i = meteors.length - 1; i >= 0; i--) {
+    const m = meteors[i];
+    m.update();
+    m.draw(meteorCtx);
+    if (m.dead) meteors.splice(i, 1);
+  }
+
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
